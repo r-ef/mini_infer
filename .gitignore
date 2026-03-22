@@ -1,0 +1,29 @@
+# build artifacts
+*.o
+*.a
+*.dSYM/
+
+# compiled binaries
+examples/basic_generate
+examples/cache_bench
+examples/quant_compare
+examples/sampling_explore
+examples/rag_memory
+examples/generate_real
+examples/experiment_cache
+tests/test_runner
+
+# model weights + tokenizer (large files)
+models/
+*.bin
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# editor
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
