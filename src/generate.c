@@ -1,4 +1,4 @@
-/* generate.c — generation orchestrator with benchmarking */
+
 #include "mi/generate.h"
 #include "mi/ops.h"
 
@@ -17,14 +17,14 @@ int mi_generate(MiGenerateConfig *cfg,
 
     int generated = 0;
 
-    /* ── Prefill prompt ── */
+
     for (int i = 0; i < prompt_len; i++) {
         mi_model_forward(m, prompt[i], logits, scratch);
     }
 
-    /* ── Decode loop ── */
+
     int cur_token;
-    /* First generated token comes from the prompt's last-position logits */
+
     {
         float *logits_copy = (float *)malloc(V * sizeof(float));
         MI_CHECK_OOM(logits_copy);
@@ -66,8 +66,6 @@ done:
     return generated;
 }
 
-/* ════════════ Benchmarking ════════════ */
-
 MiGenStats mi_generate_bench(MiGenerateConfig *cfg,
                              const int *prompt, int prompt_len,
                              int *out_tokens) {
@@ -84,7 +82,7 @@ MiGenStats mi_generate_bench(MiGenerateConfig *cfg,
     float *logits  = (float *)malloc(V * sizeof(float));
     MI_CHECK_OOM(scratch); MI_CHECK_OOM(logits);
 
-    /* ── Prefill benchmark ── */
+
     MiTimer timer;
     mi_timer_start(&timer);
     for (int i = 0; i < prompt_len; i++)
@@ -92,7 +90,7 @@ MiGenStats mi_generate_bench(MiGenerateConfig *cfg,
     stats.prefill_s = mi_timer_elapsed_s(&timer);
     stats.prefill_tokens = prompt_len;
 
-    /* ── Decode benchmark ── */
+
     int generated = 0;
     int cur_token;
     {

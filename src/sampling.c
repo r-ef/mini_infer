@@ -1,9 +1,7 @@
-/* sampling.c — greedy, top-k, top-p, min-p, typical, mirostat v2,
- *               repetition penalty, and chain composition */
+
 #include "mi/sampling.h"
 #include "mi/ops.h"
 
-/* ── Helper: categorical sample from a probability distribution ── */
 static int categorical(const float *probs, int n, MiRng *rng) {
     float r = mi_rng_float(rng);
     float cdf = 0.0f;
@@ -13,10 +11,6 @@ static int categorical(const float *probs, int n, MiRng *rng) {
     }
     return n - 1;
 }
-
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  1. Greedy                                                        ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
 
 static int greedy_sample(MiSampler *s, float *logits, int n, MiRng *rng) {
     MI_UNUSED(s); MI_UNUSED(rng);
@@ -33,10 +27,6 @@ MiSampler mi_sampler_greedy(void) {
     return (MiSampler){ .vt = &greedy_vt, .ctx = NULL };
 }
 
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  2. Top-K                                                         ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
-
 typedef struct { int k; float temperature; } TopKCtx;
 
 static int topk_sample(MiSampler *s, float *logits, int n, MiRng *rng) {
@@ -45,12 +35,12 @@ static int topk_sample(MiSampler *s, float *logits, int n, MiRng *rng) {
 
     if (c->temperature <= 0.0f) return mi_argmax(logits, n);
 
-    /* Partial sort: find the k-th largest value */
+
     float *tmp = (float *)malloc(n * sizeof(float));
     MI_CHECK_OOM(tmp);
     memcpy(tmp, logits, n * sizeof(float));
 
-    /* Simple partial selection sort for top-k threshold */
+
     for (int i = 0; i < k; i++) {
         int best = i;
         for (int j = i + 1; j < n; j++)
@@ -60,7 +50,7 @@ static int topk_sample(MiSampler *s, float *logits, int n, MiRng *rng) {
     float threshold = tmp[k - 1];
     free(tmp);
 
-    /* Apply temperature and mask below threshold */
+
     float inv_t = 1.0f / c->temperature;
     for (int i = 0; i < n; i++)
         logits[i] = (logits[i] >= threshold) ? logits[i] * inv_t : -1e9f;
@@ -83,21 +73,14 @@ MiSampler mi_sampler_top_k(int k, float temperature) {
     return (MiSampler){ .vt = &topk_vt, .ctx = c };
 }
 
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  3. Top-P (nucleus)                                               ║
- * ║                                                                   ║
- * ║  Sort by probability, keep smallest set with cumulative ≥ p.    ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
-
 typedef struct { float p; float temperature; } TopPCtx;
 
-/* ── qsort comparator for (prob, index) pairs ── */
 typedef struct { float val; int idx; } ProbIdx;
 
 static int cmp_prob_desc(const void *a, const void *b) {
     float pa = ((const ProbIdx *)a)->val;
     float pb = ((const ProbIdx *)b)->val;
-    return (pa < pb) - (pa > pb);  /* descending */
+    return (pa < pb) - (pa > pb);
 }
 
 static int topp_sample(MiSampler *s, float *logits, int n, MiRng *rng) {
@@ -105,18 +88,18 @@ static int topp_sample(MiSampler *s, float *logits, int n, MiRng *rng) {
 
     if (c->temperature <= 0.0f) return mi_argmax(logits, n);
 
-    /* Apply temperature + softmax */
+
     float inv_t = 1.0f / c->temperature;
     for (int i = 0; i < n; i++) logits[i] *= inv_t;
     mi_softmax(logits, n);
 
-    /* Sort by probability descending — O(n log n) */
+
     ProbIdx *pairs = (ProbIdx *)malloc(n * sizeof(ProbIdx));
     MI_CHECK_OOM(pairs);
     for (int i = 0; i < n; i++) { pairs[i].val = logits[i]; pairs[i].idx = i; }
     qsort(pairs, n, sizeof(ProbIdx), cmp_prob_desc);
 
-    /* Find nucleus cutoff */
+
     float cumsum = 0.0f;
     int cutoff = n;
     for (int i = 0; i < n; i++) {
@@ -124,7 +107,7 @@ static int topp_sample(MiSampler *s, float *logits, int n, MiRng *rng) {
         if (cumsum >= c->p) { cutoff = i + 1; break; }
     }
 
-    /* Zero out tokens outside nucleus and renormalise */
+
     for (int i = cutoff; i < n; i++) logits[pairs[i].idx] = 0.0f;
     float sum = 0.0f;
     for (int i = 0; i < n; i++) sum += logits[i];
@@ -148,13 +131,6 @@ MiSampler mi_sampler_top_p(float p, float temperature) {
     c->p = p; c->temperature = temperature;
     return (MiSampler){ .vt = &topp_vt, .ctx = c };
 }
-
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  4. Min-P                                                         ║
- * ║                                                                   ║
- * ║  Keep tokens where  prob ≥ min_p · max(prob).                    ║
- * ║  Simpler and often better than top-p for creative generation.    ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
 
 typedef struct { float min_p; float temperature; } MinPCtx;
 
@@ -193,14 +169,6 @@ MiSampler mi_sampler_min_p(float min_p, float temperature) {
     return (MiSampler){ .vt = &minp_vt, .ctx = c };
 }
 
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  5. Typical sampling (Meister et al. 2023)                       ║
- * ║                                                                   ║
- * ║  Keep tokens whose information content (-log p) is near the     ║
- * ║  expected information content (entropy H).  Sort by |−log p − H|║
- * ║  and keep cumulative probability ≥ τ.                            ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
-
 typedef struct { float tau; float temperature; } TypicalCtx;
 
 static int typical_sample(MiSampler *s, float *logits, int n, MiRng *rng) {
@@ -212,13 +180,13 @@ static int typical_sample(MiSampler *s, float *logits, int n, MiRng *rng) {
     for (int i = 0; i < n; i++) logits[i] *= inv_t;
     mi_softmax(logits, n);
 
-    /* Compute entropy H */
+
     float H = 0.0f;
     for (int i = 0; i < n; i++)
         if (logits[i] > 1e-12f)
             H -= logits[i] * logf(logits[i]);
 
-    /* Compute deviation |−log p − H| for each token, sort ascending */
+
     ProbIdx *pairs = (ProbIdx *)malloc(n * sizeof(ProbIdx));
     MI_CHECK_OOM(pairs);
     for (int i = 0; i < n; i++) {
@@ -227,15 +195,15 @@ static int typical_sample(MiSampler *s, float *logits, int n, MiRng *rng) {
         pairs[i].idx = i;
     }
 
-    /* Sort by deviation ascending — O(n log n) */
-    qsort(pairs, n, sizeof(ProbIdx), cmp_prob_desc); /* reuse desc... */
-    /* Actually we want ascending — reverse the comparator: */
-    /* Reverse in-place */
+
+    qsort(pairs, n, sizeof(ProbIdx), cmp_prob_desc);
+
+
     for (int i = 0, j = n-1; i < j; i++, j--) {
         ProbIdx tmp = pairs[i]; pairs[i] = pairs[j]; pairs[j] = tmp;
     }
 
-    /* Keep cumulative ≥ τ */
+
     float cumsum = 0.0f;
     int cutoff = n;
     for (int i = 0; i < n; i++) {
@@ -266,19 +234,11 @@ MiSampler mi_sampler_typical(float tau, float temperature) {
     return (MiSampler){ .vt = &typical_vt, .ctx = c };
 }
 
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  6. Mirostat v2 (Basu et al. 2021)                               ║
- * ║                                                                   ║
- * ║  Adaptively targets a surprise value τ by maintaining a maximum  ║
- * ║  surprise threshold μ.  After each token, μ is adjusted:         ║
- * ║     μ ← μ − η · (surprise − τ)                                  ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
-
 typedef struct {
-    float tau;    /* target surprise */
-    float eta;    /* learning rate */
-    float mu;     /* current max surprise threshold */
-    /* We also cache the logprobs from the last sample */
+    float tau;
+    float eta;
+    float mu;
+
     float *last_logprobs;
     int    last_n;
 } MirostatCtx;
@@ -286,7 +246,7 @@ typedef struct {
 static int mirostat_sample(MiSampler *s, float *logits, int n, MiRng *rng) {
     MirostatCtx *c = (MirostatCtx *)s->ctx;
 
-    /* Compute log-probs */
+
     float *lp = (float *)realloc(c->last_logprobs, n * sizeof(float));
     MI_CHECK_OOM(lp);
     c->last_logprobs = lp;
@@ -294,14 +254,14 @@ static int mirostat_sample(MiSampler *s, float *logits, int n, MiRng *rng) {
 
     mi_log_softmax(logits, lp, n);
 
-    /* Keep tokens whose surprise (−log p) is ≤ μ */
+
     for (int i = 0; i < n; i++)
         logits[i] = (-lp[i] <= c->mu) ? expf(lp[i]) : 0.0f;
 
     float sum = mi_vec_sum(logits, n);
     if (sum <= 0.0f) {
-        /* Fallback: just pick the max-prob token */
-        mi_softmax(lp, n);  /* oops, lp is logprobs, use for softmax */
+
+        mi_softmax(lp, n);
         return mi_argmax(lp, n);
     }
 
@@ -317,13 +277,13 @@ static void mirostat_accept(MiSampler *s, int token_id) {
 
     float surprise = -c->last_logprobs[token_id];
     c->mu -= c->eta * (surprise - c->tau);
-    /* Clamp μ to be positive */
+
     if (c->mu < 0.01f) c->mu = 0.01f;
 }
 
 static void mirostat_reset(MiSampler *s) {
     MirostatCtx *c = (MirostatCtx *)s->ctx;
-    c->mu = 2.0f * c->tau;  /* re-init */
+    c->mu = 2.0f * c->tau;
 }
 
 static void mirostat_destroy(MiSampler *s) {
@@ -345,17 +305,10 @@ MiSampler mi_sampler_mirostat_v2(float tau, float eta) {
     return (MiSampler){ .vt = &mirostat_vt, .ctx = c };
 }
 
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  7. Repetition penalty — logit transform (returns -1)            ║
- * ║                                                                   ║
- * ║  Divides logits for recently-seen tokens by penalty (>1).        ║
- * ║  Meant to be used in a chain before a real sampler.              ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
-
 typedef struct {
     float penalty;
     int   window;
-    int  *history;      /* ring buffer */
+    int  *history;
     int   hist_len;
     int   hist_pos;
 } RepCtx;
@@ -374,7 +327,7 @@ static int rep_sample(MiSampler *s, float *logits, int n, MiRng *rng) {
                 logits[idx] *= c->penalty;
         }
     }
-    return -1;  /* logit-only transform */
+    return -1;
 }
 
 static void rep_accept(MiSampler *s, int token_id) {
@@ -408,13 +361,6 @@ MiSampler mi_sampler_repetition(float penalty, int window) {
     MI_CHECK_OOM(c->history);
     return (MiSampler){ .vt = &rep_vt, .ctx = c };
 }
-
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  8. Chain — compose multiple samplers                             ║
- * ║                                                                   ║
- * ║  Runs each sampler in sequence.  Earlier ones transform logits   ║
- * ║  (return -1).  The last one produces the actual token.           ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
 
 typedef struct {
     MiSampler *items;

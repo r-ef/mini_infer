@@ -1,30 +1,15 @@
-/* experiment_cache.c — measure compressed-cache quality degradation
- *
- * Runs the same prompt through dense (ground truth) and compressed caches
- * with varying fresh_count.  Uses GREEDY sampling so divergence is purely
- * caused by int8 quantisation of old KV entries.
- *
- * Metrics per fresh_count:
- *   - first divergent token position
- *   - argmax match rate (%)
- *   - mean logit cosine similarity
- *   - memory savings
- *
- * Usage:
- *   ./examples/experiment_cache ./models/smollm [gen_tokens]
- */
+
 #include "mi.h"
 
 #define MAX_GEN 256
 
-/* Run generation with a specific cache, capturing logits + tokens. */
 static void run_generation(MiModel *model, MiCache cache,
                            const int *prompt, int prompt_len,
                            int gen_tokens,
-                           int *out_tokens, float *out_logits /* [gen*V] */) {
+                           int *out_tokens, float *out_logits ) {
     int V = model->cfg.vocab_size;
 
-    /* Destroy old cache, swap in new one, reset position */
+
     mi_cache_destroy(&model->cache);
     model->cache = cache;
     model->pos   = 0;
@@ -34,15 +19,15 @@ static void run_generation(MiModel *model, MiCache cache,
     float *logits  = (float *)malloc(V * sizeof(float));
     MI_CHECK_OOM(scratch); MI_CHECK_OOM(logits);
 
-    /* Prefill */
+
     for (int i = 0; i < prompt_len; i++)
         mi_model_forward(model, prompt[i], logits, scratch);
 
-    /* First token from prompt logits */
+
     out_tokens[0] = mi_argmax(logits, V);
     memcpy(out_logits, logits, V * sizeof(float));
 
-    /* Decode */
+
     for (int i = 1; i < gen_tokens; i++) {
         mi_model_forward(model, out_tokens[i-1], logits, scratch);
         out_tokens[i] = mi_argmax(logits, V);
@@ -64,7 +49,7 @@ int main(int argc, char **argv) {
 
     mi_log_level = MI_LOG_INFO;
 
-    /* ── Load model ── */
+
     char path[512];
     snprintf(path, sizeof(path), "%s/model.bin", model_dir);
     MiModel model = mi_model_load_file(path);
@@ -80,7 +65,7 @@ int main(int argc, char **argv) {
     int kv_h = model.cfg.n_kv_heads;
     int dh = model.cfg.d_head;
 
-    /* ── Encode prompt ── */
+
     const char *prompt_text = "In a groundbreaking discovery, researchers at the "
         "institute have found that the fundamental nature of consciousness may be "
         "linked to quantum processes occurring within neural microtubules. This "
@@ -103,7 +88,7 @@ int main(int argc, char **argv) {
            prompt_len + gen_tokens);
     printf("╚═══════════════════════════════════════════════════════════════╝\n\n");
 
-    /* ── Allocate result buffers ── */
+
     int   *dense_tokens = (int *)malloc(gen_tokens * sizeof(int));
     float *dense_logits = (float *)malloc((size_t)gen_tokens * V * sizeof(float));
     int   *comp_tokens  = (int *)malloc(gen_tokens * sizeof(int));
@@ -111,7 +96,7 @@ int main(int argc, char **argv) {
     MI_CHECK_OOM(dense_tokens); MI_CHECK_OOM(dense_logits);
     MI_CHECK_OOM(comp_tokens);  MI_CHECK_OOM(comp_logits);
 
-    /* ── Run dense baseline ── */
+
     int max_seq = prompt_len + gen_tokens + 16;
     MiCache dense_cache = mi_cache_dense(L, kv_h, dh, max_seq);
 
@@ -124,14 +109,14 @@ int main(int argc, char **argv) {
     printf("  %.2f s (%.1f tok/s)\n\n", dense_time,
            gen_tokens / dense_time);
 
-    /* Print dense output */
+
     char *dense_text = mi_tokenizer_decode(&tok, dense_tokens, gen_tokens);
     printf("Dense output:\n  %.120s...\n\n", dense_text);
     free(dense_text);
 
-    /* model now owns dense_cache — run_generation will destroy it on swap */
 
-    /* ── Run compressed cache with various fresh_count ── */
+
+
     int fresh_values[] = {4, 8, 16, 32, 64, 128};
     int n_fresh = MI_ARRAY_LEN(fresh_values);
 
@@ -146,8 +131,8 @@ int main(int argc, char **argv) {
         run_generation(&model, ccache, prompt_tokens, prompt_len,
                        gen_tokens, comp_tokens, comp_logits);
 
-        /* ── Compute metrics ── */
-        int first_diverge = gen_tokens; /* means no divergence */
+
+        int first_diverge = gen_tokens;
         int matches = 0;
         double cos_sum = 0.0;
 
@@ -157,7 +142,7 @@ int main(int argc, char **argv) {
             else if (first_diverge == gen_tokens)
                 first_diverge = i;
 
-            /* Cosine similarity between logit vectors */
+
             float *dl = dense_logits + (size_t)i * V;
             float *cl = comp_logits  + (size_t)i * V;
             cos_sum += mi_vec_cosine(dl, cl, V);
@@ -166,13 +151,13 @@ int main(int argc, char **argv) {
         double match_pct = 100.0 * matches / gen_tokens;
         double mean_cos  = cos_sum / gen_tokens;
 
-        /* Memory: compressed uses int8 for old entries, fp32 for fresh */
+
         int total_ctx = prompt_len + gen_tokens;
         int compressed_entries = MI_MAX(0, total_ctx - fresh);
         int kv_dim = kv_h * dh;
         double dense_bytes = (double)total_ctx * kv_dim * 4.0 * 2 * L;
-        double comp_bytes  = (double)compressed_entries * kv_dim * 1.0 * 2 * L  /* int8 */
-                           + (double)MI_MIN(fresh, total_ctx) * kv_dim * 4.0 * 2 * L; /* fp32 */
+        double comp_bytes  = (double)compressed_entries * kv_dim * 1.0 * 2 * L
+                           + (double)MI_MIN(fresh, total_ctx) * kv_dim * 4.0 * 2 * L;
         double mem_ratio = comp_bytes / dense_bytes;
 
         char div_str[32];
@@ -187,7 +172,7 @@ int main(int argc, char **argv) {
 
     printf("──────────────┴─────────────┴─────────┴──────────────┴──────────\n\n");
 
-    /* ── Detailed divergence analysis for smallest fresh_count ── */
+
     {
         int fresh = fresh_values[0];
         MiCache ccache = mi_cache_compressed(L, kv_h, dh, max_seq, fresh);
@@ -212,7 +197,7 @@ int main(int argc, char **argv) {
 
     printf("\n");
 
-    /* ── Also compare sliding window cache ── */
+
     printf("Bonus: sliding window cache comparison:\n");
     printf("  window_size │ 1st diverge │ match%%  │ mean cos_sim\n");
     printf("──────────────┼─────────────┼─────────┼─────────────\n");
@@ -247,7 +232,7 @@ int main(int argc, char **argv) {
     }
     printf("──────────────┴─────────────┴─────────┴─────────────\n");
 
-    /* Cleanup */
+
     free(dense_tokens); free(dense_logits);
     free(comp_tokens);  free(comp_logits);
     mi_tokenizer_free(&tok);

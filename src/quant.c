@@ -1,8 +1,6 @@
-/* quant.c — quantisation research: int8, int4, Q4_0, Q8_0, FP16/BF16 */
+
 #include "mi/quant.h"
 #include "mi/ops.h"
-
-/* ════════════ INT8 Absmax (symmetric) ════════════ */
 
 MiQInt8 mi_quant_int8_absmax(const float *data, int n) {
     MiQInt8 q;
@@ -38,8 +36,6 @@ void mi_quant_int8_free(MiQInt8 *q) {
     free(q->data); q->data = NULL;
 }
 
-/* ════════════ INT8 Zero-point (asymmetric) ════════════ */
-
 MiQInt8ZP mi_quant_int8_zp(const float *data, int n) {
     MiQInt8ZP q;
     q.n    = n;
@@ -51,7 +47,7 @@ MiQInt8ZP mi_quant_int8_zp(const float *data, int n) {
         if (data[i] < fmin) fmin = data[i];
         if (data[i] > fmax) fmax = data[i];
     }
-    q.scale = (fmax - fmin) / 254.0f;  /* map to [-127, 127] */
+    q.scale = (fmax - fmin) / 254.0f;
     float mid = (fmax + fmin) * 0.5f;
     q.zero_point = (int8_t)roundf(-mid / q.scale);
 
@@ -77,8 +73,6 @@ void mi_quant_int8_zp_free(MiQInt8ZP *q) {
     free(q->data); q->data = NULL;
 }
 
-/* ════════════ INT4 Group ════════════ */
-
 MiQInt4 mi_quant_int4_group(const float *data, int n, int group_size) {
     MiQInt4 q;
     q.n          = n;
@@ -86,7 +80,7 @@ MiQInt4 mi_quant_int4_group(const float *data, int n, int group_size) {
     q.n_groups   = (n + group_size - 1) / group_size;
     q.data       = (uint8_t *)calloc((n + 1) / 2, 1);
     q.scales     = (float *)calloc(q.n_groups, sizeof(float));
-    q.zeros      = NULL;  /* symmetric */
+    q.zeros      = NULL;
     MI_CHECK_OOM(q.data); MI_CHECK_OOM(q.scales);
 
     for (int g = 0; g < q.n_groups; g++) {
@@ -98,13 +92,13 @@ MiQInt4 mi_quant_int4_group(const float *data, int n, int group_size) {
             float a = fabsf(data[i]);
             if (a > amax) amax = a;
         }
-        q.scales[g] = amax / 7.0f;  /* int4 range: -8..7 */
+        q.scales[g] = amax / 7.0f;
 
         float inv = (amax > 1e-10f) ? 7.0f / amax : 0.0f;
         for (int i = start; i < end; i++) {
             int v = (int)roundf(data[i] * inv);
             v = MI_CLAMP(v, -8, 7);
-            uint8_t nibble = (uint8_t)(v + 8);  /* map to 0..15 */
+            uint8_t nibble = (uint8_t)(v + 8);
             int byte_idx = i / 2;
             if (i % 2 == 0)
                 q.data[byte_idx] = (q.data[byte_idx] & 0xF0) | (nibble & 0x0F);
@@ -128,7 +122,7 @@ void mi_dequant_int4_group(const MiQInt4 *q, float *out) {
                 nibble = q->data[byte_idx] & 0x0F;
             else
                 nibble = (q->data[byte_idx] >> 4) & 0x0F;
-            int val = (int)nibble - 8;  /* back to -8..7 */
+            int val = (int)nibble - 8;
             out[i] = (float)val * scale;
         }
     }
@@ -138,8 +132,6 @@ void mi_quant_int4_free(MiQInt4 *q) {
     free(q->data); free(q->scales); free(q->zeros);
     q->data = NULL; q->scales = NULL; q->zeros = NULL;
 }
-
-/* ════════════ Q4_0 Block (GGML-style) ════════════ */
 
 int mi_quant_q4_0_nblocks(int n) {
     return (n + MI_Q4_0_BLOCK - 1) / MI_Q4_0_BLOCK;
@@ -163,7 +155,7 @@ void mi_quant_q4_0(const float *data, MiBlockQ4_0 *blocks, int n) {
         memset(blocks[b].qs, 0, MI_Q4_0_BLOCK / 2);
         for (int i = start; i < end; i++) {
             int j = i - start;
-            int v = (int)roundf(data[i] * inv) + 8;  /* 0..16, clamp to 0..15 */
+            int v = (int)roundf(data[i] * inv) + 8;
             v = MI_CLAMP(v, 0, 15);
             int byte_idx = j / 2;
             if (j % 2 == 0)
@@ -192,8 +184,6 @@ void mi_dequant_q4_0(const MiBlockQ4_0 *blocks, float *out, int n) {
         }
     }
 }
-
-/* ════════════ Q8_0 Block (GGML-style) ════════════ */
 
 int mi_quant_q8_0_nblocks(int n) {
     return (n + MI_Q8_0_BLOCK - 1) / MI_Q8_0_BLOCK;
@@ -234,16 +224,13 @@ void mi_dequant_q8_0(const MiBlockQ8_0 *blocks, float *out, int n) {
     }
 }
 
-/* ════════════ Quantised matvec ════════════ */
-
 void mi_matvec_int8(const int8_t *W, const float *row_scales,
                     const float *x, float *out, int rows, int cols) {
     for (int r = 0; r < rows; r++) {
         const int8_t *row = W + (size_t)r * cols;
         int32_t acc = 0;
-        /* Accumulate in int32 for accuracy */
-        /* x is fp32, so we do mixed: int8 * fp32 per element.
-         * For true int8 matmul you'd quantise x too. */
+
+
         float sum = 0.0f;
         for (int c = 0; c < cols; c++)
             sum += (float)row[c] * x[c];
@@ -273,9 +260,6 @@ void mi_matvec_q4_0(const MiBlockQ4_0 *W, const float *x,
     }
 }
 
-/* ════════════ FP16 / BF16 conversion ════════════ */
-
-/* IEEE 754 half-precision (binary16) */
 uint16_t mi_f32_to_f16(float x) {
     uint32_t u;
     memcpy(&u, &x, 4);
@@ -284,8 +268,8 @@ uint16_t mi_f32_to_f16(float x) {
     int32_t  exp  = ((u >> 23) & 0xFF) - 127;
     uint32_t frac = u & 0x7FFFFF;
 
-    if (exp > 15)  return sign | 0x7C00;          /* overflow → inf */
-    if (exp < -14) return sign;                     /* underflow → 0 */
+    if (exp > 15)  return sign | 0x7C00;
+    if (exp < -14) return sign;
 
     uint16_t hexp  = (uint16_t)((exp + 15) << 10);
     uint16_t hfrac = (uint16_t)(frac >> 13);
@@ -298,10 +282,10 @@ float mi_f16_to_f32(uint16_t h) {
     uint32_t frac = h & 0x3FF;
 
     if (exp == 0) {
-        if (frac == 0) { /* ±0 */
+        if (frac == 0) {
             float f; uint32_t u = sign; memcpy(&f, &u, 4); return f;
         }
-        /* Denorm: normalise */
+
         exp = 1;
         while (!(frac & 0x400)) { frac <<= 1; exp--; }
         frac &= 0x3FF;
@@ -318,7 +302,7 @@ float mi_f16_to_f32(uint16_t h) {
 uint16_t mi_f32_to_bf16(float x) {
     uint32_t u;
     memcpy(&u, &x, 4);
-    /* Round to nearest even */
+
     u += 0x7FFF + ((u >> 16) & 1);
     return (uint16_t)(u >> 16);
 }
@@ -328,8 +312,6 @@ float mi_bf16_to_f32(uint16_t b) {
     float f; memcpy(&f, &u, 4);
     return f;
 }
-
-/* ════════════ Error analysis ════════════ */
 
 MiQuantStats mi_quant_analyze(const float *orig, const float *deq, int n) {
     MiQuantStats s = {0};

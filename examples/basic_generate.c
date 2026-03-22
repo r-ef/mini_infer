@@ -1,5 +1,4 @@
-/* basic_generate.c — create a small random model, generate tokens,
- *                     compare different samplers side by side. */
+
 #include "mi.h"
 
 static bool print_token(int token_id, int pos, void *data) {
@@ -13,11 +12,11 @@ static bool print_token(int token_id, int pos, void *data) {
 int main(void) {
     mi_log_level = MI_LOG_WARN;
 
-    /* ── Tiny model config ── */
+
     MiModelConfig cfg = {
         .d_model     = 64,
         .n_heads     = 4,
-        .n_kv_heads  = 2,     /* GQA: 4 query heads, 2 KV heads */
+        .n_kv_heads  = 2,
         .d_head      = 16,
         .d_ff        = 128,
         .n_layers    = 2,
@@ -28,12 +27,12 @@ int main(void) {
         .ffn_type    = MI_FFN_SWIGLU,
     };
 
-    /* ── Build model ── */
+
     MiRng rng = mi_rng_create(42);
     MiModel model = mi_model_create(cfg);
     mi_model_init_random(&model, &rng);
 
-    /* ── Build tokenizer ── */
+
     MiTokenizer tok = mi_tokenizer_create(cfg.vocab_size);
     const char *words[] = {
         "the","cat","sat","on","mat","a","big","small","red","blue",
@@ -44,13 +43,13 @@ int main(void) {
     for (int i = 0; i < cfg.vocab_size; i++)
         mi_tokenizer_set(&tok, i, words[i], 0.0f);
 
-    /* ── Prompt ── */
-    int prompt[] = {0, 1, 2, 3, 0, 4}; /* "the cat sat on the mat" */
+
+    int prompt[] = {0, 1, 2, 3, 0, 4};
     int prompt_len = 6;
     int max_gen = 20;
     int *out = (int *)malloc(max_gen * sizeof(int));
 
-    /* ── Test different samplers ── */
+
     printf("═══ Prompt: ");
     for (int i = 0; i < prompt_len; i++)
         printf("%s ", mi_tokenizer_token(&tok, prompt[i]));
@@ -86,7 +85,7 @@ int main(void) {
         printf(" (%d tokens)\n", n);
     }
 
-    /* ── Benchmark ── */
+
     printf("\n═══ Benchmark ═══\n");
     mi_model_reset(&model);
     MiSampler greedy = mi_sampler_greedy();
@@ -98,7 +97,7 @@ int main(void) {
     MiGenStats stats = mi_generate_bench(&bench_cfg, prompt, prompt_len, out);
     mi_gen_stats_print(&stats);
 
-    /* ── Cleanup ── */
+
     for (int i = 0; i < n_samplers; i++)
         mi_sampler_destroy(&samplers[i].s);
     mi_sampler_destroy(&greedy);

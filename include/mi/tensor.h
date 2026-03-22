@@ -1,9 +1,4 @@
-/* ═══════════════════════════════════════════════════════════════════
- * tensor.h — 2-D float matrix with optional view semantics
- *
- * Deliberately kept simple (rows × cols, float*).  Higher-dimensional
- * bookkeeping (layers, heads) lives in the modules that need it.
- * ═══════════════════════════════════════════════════════════════════ */
+
 #ifndef MI_TENSOR_H
 #define MI_TENSOR_H
 
@@ -13,17 +8,15 @@ typedef struct {
     int   rows;
     int   cols;
     float *data;
-    bool  owned;          /* true → we allocated data; false → view */
+    bool  owned;
 } MiTensor;
 
-/* ── Lifecycle ── */
 MiTensor mi_tensor_create(int rows, int cols);
 MiTensor mi_tensor_zeros(int rows, int cols);
 MiTensor mi_tensor_view(float *data, int rows, int cols);
 MiTensor mi_tensor_clone(const MiTensor *t);
 void     mi_tensor_free(MiTensor *t);
 
-/* ── Element access (inline) ── */
 static inline float mi_tensor_get(const MiTensor *t, int r, int c) {
     return t->data[r * t->cols + c];
 }
@@ -37,7 +30,6 @@ static inline int mi_tensor_numel(const MiTensor *t) {
     return t->rows * t->cols;
 }
 
-/* ── View helpers ── */
 static inline MiTensor mi_tensor_row_view(const MiTensor *t, int r) {
     return (MiTensor){ .rows = 1, .cols = t->cols,
                        .data = t->data + r * t->cols, .owned = false };
@@ -48,14 +40,12 @@ static inline MiTensor mi_tensor_slice_rows(const MiTensor *t,
                        .data = t->data + start * t->cols, .owned = false };
 }
 
-/* ── Bulk ops ── */
 void mi_tensor_fill(MiTensor *t, float val);
 void mi_tensor_rand(MiTensor *t, MiRng *rng, float lo, float hi);
 void mi_tensor_rand_normal(MiTensor *t, MiRng *rng, float mean, float std);
 void mi_tensor_copy(const MiTensor *src, MiTensor *dst);
 void mi_tensor_print(const MiTensor *t, const char *name);
 
-/* ── Vector print utility ── */
 void mi_print_vec(const float *x, int n, const char *name);
 
-#endif /* MI_TENSOR_H */
+#endif

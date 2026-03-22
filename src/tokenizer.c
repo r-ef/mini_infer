@@ -1,7 +1,5 @@
-/* tokenizer.c — byte-level BPE tokeniser + toy word-level fallback */
-#include "mi/tokenizer.h"
 
-/* ════════════ Merge hash map ════════════ */
+#include "mi/tokenizer.h"
 
 static uint64_t merge_key(int a, int b) {
     return ((uint64_t)(uint32_t)a << 32) | (uint32_t)b;
@@ -26,13 +24,12 @@ static void merge_map_insert(MiTokenizer *t, int a, int b,
     t->merge_map[idx].rank   = rank;
 }
 
-/* Returns rank (≥0) or -1 if not found */
 static int merge_map_lookup(const MiTokenizer *t, int a, int b) {
     if (!t->merge_map) return -1;
     uint64_t key = merge_key(a, b);
     uint32_t idx = merge_hash(key, t->merge_map_cap);
     for (;;) {
-        if (t->merge_map[idx].rank < 0) return -1;     /* empty slot */
+        if (t->merge_map[idx].rank < 0) return -1;
         if (t->merge_map[idx].key == key) return t->merge_map[idx].rank;
         idx = (idx + 1) % (uint32_t)t->merge_map_cap;
     }
@@ -49,8 +46,6 @@ static int merge_map_result(const MiTokenizer *t, int a, int b) {
     }
 }
 
-/* ════════════ Toy mode ════════════ */
-
 MiTokenizer mi_tokenizer_create(int vocab_size) {
     MiTokenizer t;
     memset(&t, 0, sizeof(t));
@@ -61,7 +56,7 @@ MiTokenizer mi_tokenizer_create(int vocab_size) {
     t.vocab_strs = (char **)calloc(vocab_size, sizeof(char *));
     t.scores     = (float *)calloc(vocab_size, sizeof(float));
     MI_CHECK_OOM(t.vocab_strs); MI_CHECK_OOM(t.scores);
-    /* Default byte_to_token: identity */
+
     for (int i = 0; i < 256; i++) t.byte_to_token[i] = i % vocab_size;
     return t;
 }
@@ -74,8 +69,6 @@ void mi_tokenizer_set(MiTokenizer *t, int id, const char *text, float score) {
     }
     if (t->scores) t->scores[id] = score;
 }
-
-/* ════════════ BPE binary loader ════════════ */
 
 static int32_t read_i32(FILE *f) {
     int32_t v;
@@ -91,7 +84,7 @@ MiTokenizer mi_tokenizer_load_bpe(const char *path) {
     FILE *f = fopen(path, "rb");
     MI_ASSERT(f != NULL, "cannot open tokenizer: %s", path);
 
-    /* Header */
+
     uint32_t magic = 0;
     if (fread(&magic, 4, 1, f) != 1 || magic != 0x4D49544B) {
         MI_ASSERT(false, "bad tokenizer magic 0x%08X in %s", magic, path);
@@ -106,11 +99,11 @@ MiTokenizer mi_tokenizer_load_bpe(const char *path) {
     MI_INFO("loading tokenizer: vocab=%d  merges=%d  bos=%d  eos=%d",
             t.vocab_size, t.n_merges, t.bos_token, t.eos_token);
 
-    /* Byte-to-token mapping */
+
     for (int i = 0; i < 256; i++)
         t.byte_to_token[i] = read_i32(f);
 
-    /* Vocabulary */
+
     t.tokens     = (uint8_t **)calloc(t.vocab_size, sizeof(uint8_t *));
     t.token_lens = (int *)calloc(t.vocab_size, sizeof(int));
     MI_CHECK_OOM(t.tokens); MI_CHECK_OOM(t.token_lens);
@@ -127,13 +120,13 @@ MiTokenizer mi_tokenizer_load_bpe(const char *path) {
         t.tokens[i][len] = '\0';
     }
 
-    /* Merge hash map — load at ~50% fill for fast lookups */
+
     t.merge_map_cap = t.n_merges * 3 + 1;
     t.merge_map = (MiMergeBucket *)malloc(
         (size_t)t.merge_map_cap * sizeof(MiMergeBucket));
     MI_CHECK_OOM(t.merge_map);
     for (int i = 0; i < t.merge_map_cap; i++)
-        t.merge_map[i].rank = -1;  /* empty sentinel */
+        t.merge_map[i].rank = -1;
 
     for (int i = 0; i < t.n_merges; i++) {
         int a = read_i32(f);
@@ -146,8 +139,6 @@ MiTokenizer mi_tokenizer_load_bpe(const char *path) {
     MI_INFO("tokenizer loaded");
     return t;
 }
-
-/* ════════════ Free ════════════ */
 
 void mi_tokenizer_free(MiTokenizer *t) {
     if (t->tokens) {
@@ -164,12 +155,10 @@ void mi_tokenizer_free(MiTokenizer *t) {
     memset(t, 0, sizeof(*t));
 }
 
-/* ════════════ Encode ════════════ */
-
 int mi_tokenizer_encode(const MiTokenizer *t, const char *text,
                         int *out, int max_tokens) {
     if (!t->is_bpe) {
-        /* ── Legacy word-level encode ── */
+
         int count = 0;
         const char *p = text;
         while (*p && count < max_tokens) {
@@ -193,11 +182,11 @@ int mi_tokenizer_encode(const MiTokenizer *t, const char *text,
         return count;
     }
 
-    /* ── BPE encode ── */
+
     int text_len = (int)strlen(text);
     if (text_len == 0) return 0;
 
-    /* 1. Map each byte to its initial token id */
+
     int cap = text_len + 16;
     int *ids = (int *)malloc(cap * sizeof(int));
     MI_CHECK_OOM(ids);
@@ -205,7 +194,7 @@ int mi_tokenizer_encode(const MiTokenizer *t, const char *text,
     for (int i = 0; i < text_len; i++)
         ids[n++] = t->byte_to_token[(uint8_t)text[i]];
 
-    /* 2. Iteratively apply the highest-priority merge */
+
     while (n >= 2) {
         int best_rank = INT32_MAX;
         int best_pos  = -1;
@@ -219,7 +208,7 @@ int mi_tokenizer_encode(const MiTokenizer *t, const char *text,
         }
         if (best_pos < 0) break;
 
-        /* Apply merge at best_pos */
+
         ids[best_pos] = merge_map_result(t, ids[best_pos], ids[best_pos + 1]);
         memmove(ids + best_pos + 1, ids + best_pos + 2,
                 (n - best_pos - 2) * sizeof(int));
@@ -232,12 +221,10 @@ int mi_tokenizer_encode(const MiTokenizer *t, const char *text,
     return out_n;
 }
 
-/* ════════════ Decode ════════════ */
-
 char *mi_tokenizer_decode(const MiTokenizer *t,
                           const int *tokens, int n) {
     if (t->is_bpe && t->tokens) {
-        /* BPE decode: concatenate raw bytes */
+
         size_t total = 0;
         for (int i = 0; i < n; i++) {
             int id = tokens[i];
@@ -258,7 +245,7 @@ char *mi_tokenizer_decode(const MiTokenizer *t,
         return buf;
     }
 
-    /* Legacy decode */
+
     size_t total = 1;
     for (int i = 0; i < n; i++)
         total += strlen(mi_tokenizer_token(t, tokens[i])) + 1;
@@ -272,14 +259,10 @@ char *mi_tokenizer_decode(const MiTokenizer *t,
     return buf;
 }
 
-/* ════════════ Token display string ════════════ */
-
 const char *mi_tokenizer_token(const MiTokenizer *t, int id) {
     if (id < 0 || id >= t->vocab_size) return "<unk>";
     if (t->is_bpe && t->tokens) {
-        /* Return the raw byte sequence as a string — it's already
-         * null-terminated by the loader. For non-printable tokens
-         * this might look odd, but it's correct UTF-8. */
+
         return (const char *)t->tokens[id];
     }
     if (t->vocab_strs && t->vocab_strs[id]) return t->vocab_strs[id];

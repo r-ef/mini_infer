@@ -1,15 +1,12 @@
-/* base.c — globals, RNG (xoshiro256**) */
+
 #include "mi/base.h"
 
 MiLogLevel mi_log_level = MI_LOG_INFO;
-
-/* ── xoshiro256** ── */
 
 static inline uint64_t rotl64(uint64_t x, int k) {
     return (x << k) | (x >> (64 - k));
 }
 
-/* SplitMix64 to seed the state from a single u64 */
 static uint64_t splitmix64(uint64_t *state) {
     uint64_t z = (*state += 0x9e3779b97f4a7c15ULL);
     z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
@@ -41,12 +38,12 @@ uint64_t mi_rng_next(MiRng *rng) {
 }
 
 float mi_rng_float(MiRng *rng) {
-    /* Use upper 24 bits for a float in [0, 1) */
+
     return (float)(mi_rng_next(rng) >> 40) / (float)(1ULL << 24);
 }
 
 float mi_rng_normal(MiRng *rng) {
-    /* Box-Muller */
+
     float u1 = mi_rng_float(rng);
     float u2 = mi_rng_float(rng);
     if (u1 < 1e-10f) u1 = 1e-10f;

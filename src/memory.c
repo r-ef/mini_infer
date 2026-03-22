@@ -1,25 +1,17 @@
-/* memory.c — KV compression, eviction, token merging, RAG memory */
+
 #include "mi/memory.h"
 #include "mi/ops.h"
-
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  Attention Sink (StreamingLLM, Xiao et al. 2023)                ║
- * ║                                                                   ║
- * ║  Keep the first `sink_size` tokens (attention sinks absorb       ║
- * ║  probability mass even when irrelevant) plus the most recent    ║
- * ║  `window_size` tokens.  Evict everything in between.            ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
 
 void mi_sink_evict(float *K, float *V, int *seq_len,
                    int kv_dim, const MiSinkConfig *cfg) {
     int n = *seq_len;
     int keep_total = cfg->sink_size + cfg->window_size;
-    if (n <= keep_total) return;  /* nothing to evict */
+    if (n <= keep_total) return;
 
-    /* Keep: [0, sink_size) and [n - window_size, n) */
+
     int window_start = n - cfg->window_size;
 
-    /* Move window portion right after sinks */
+
     memmove(K + (size_t)cfg->sink_size * kv_dim,
             K + (size_t)window_start * kv_dim,
             (size_t)cfg->window_size * kv_dim * sizeof(float));
@@ -29,14 +21,6 @@ void mi_sink_evict(float *K, float *V, int *seq_len,
 
     *seq_len = keep_total;
 }
-
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  H2O — Heavy-Hitter Oracle (Zhang et al. 2023)                  ║
- * ║                                                                   ║
- * ║  Track cumulative attention received by each KV position.        ║
- * ║  When the cache exceeds budget, evict the positions with the    ║
- * ║  lowest cumulative attention — they are "cold" tokens.          ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
 
 MiH2O mi_h2o_create(int max_seq, int budget) {
     MiH2O h;
@@ -63,12 +47,12 @@ int mi_h2o_select(const MiH2O *h, int seq_len,
                   int *keep_indices) {
     int n_keep = MI_MIN(seq_len, h->budget);
 
-    /* Build index array, sort by cumulative attention descending */
+
     int *indices = (int *)malloc(seq_len * sizeof(int));
     MI_CHECK_OOM(indices);
     for (int i = 0; i < seq_len; i++) indices[i] = i;
 
-    /* Selection sort top n_keep (good enough for research) */
+
     for (int i = 0; i < n_keep; i++) {
         int best = i;
         for (int j = i + 1; j < seq_len; j++)
@@ -77,7 +61,7 @@ int mi_h2o_select(const MiH2O *h, int seq_len,
         int tmp = indices[i]; indices[i] = indices[best]; indices[best] = tmp;
     }
 
-    /* Sort the kept indices by position (ascending) to preserve order */
+
     for (int i = 1; i < n_keep; i++) {
         int key = indices[i];
         int j = i - 1;
@@ -108,13 +92,6 @@ void mi_h2o_compact(float *K, float *V, int *seq_len, int kv_dim,
     *seq_len = n_keep;
 }
 
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  Token Merge — merge similar adjacent KV entries                ║
- * ║                                                                   ║
- * ║  Walk pairs (i, i+1); if cosine_similarity(K[i], K[i+1]) >     ║
- * ║  threshold, replace both with their average.  Reduces seq_len.  ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
-
 int mi_token_merge(float *K, float *V, int seq_len, int kv_dim,
                    const MiMergeConfig *cfg) {
     if (seq_len < 2) return seq_len;
@@ -127,7 +104,7 @@ int mi_token_merge(float *K, float *V, int seq_len, int kv_dim,
                                       K + (size_t)(i + 1) * kv_dim,
                                       kv_dim);
             if (sim > cfg->threshold) {
-                /* Merge: average the two entries */
+
                 float *k_dst = K + (size_t)write * kv_dim;
                 float *v_dst = V + (size_t)write * kv_dim;
                 const float *k0 = K + (size_t)i * kv_dim;
@@ -143,7 +120,7 @@ int mi_token_merge(float *K, float *V, int seq_len, int kv_dim,
                 continue;
             }
         }
-        /* No merge — copy as-is */
+
         if (write != i) {
             memcpy(K + (size_t)write * kv_dim,
                    K + (size_t)i * kv_dim, kv_dim * sizeof(float));
@@ -155,10 +132,6 @@ int mi_token_merge(float *K, float *V, int seq_len, int kv_dim,
     }
     return write;
 }
-
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  Vector Store — brute-force cosine-similarity retrieval          ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
 
 MiVectorStore mi_vstore_create(int dim, int capacity) {
     MiVectorStore vs;
@@ -190,7 +163,7 @@ int mi_vstore_search(const MiVectorStore *vs, const float *query,
     if (n == 0) return 0;
     k = MI_MIN(k, n);
 
-    /* Brute-force — compute all cosine similarities */
+
     float *sims = (float *)malloc(n * sizeof(float));
     int *indices = (int *)malloc(n * sizeof(int));
     MI_CHECK_OOM(sims); MI_CHECK_OOM(indices);
@@ -202,7 +175,7 @@ int mi_vstore_search(const MiVectorStore *vs, const float *query,
         indices[i] = i;
     }
 
-    /* Partial selection sort for top-k */
+
     for (int i = 0; i < k; i++) {
         int best = i;
         for (int j = i + 1; j < n; j++)
@@ -219,14 +192,6 @@ int mi_vstore_search(const MiVectorStore *vs, const float *query,
     return k;
 }
 
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  RAG Augment — inject retrieved vectors into KV cache           ║
- * ║                                                                   ║
- * ║  Retrieves n_retrieve nearest neighbours from the vector store, ║
- * ║  filters by gate_threshold, and PREPENDS them to K/V arrays.    ║
- * ║  This shifts existing entries forward in memory.                 ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
-
 int mi_rag_augment(const MiRAGConfig *cfg, const float *query,
                    float *K, float *V, int *seq_len,
                    int kv_dim, int max_seq_len) {
@@ -239,7 +204,7 @@ int mi_rag_augment(const MiRAGConfig *cfg, const float *query,
     int found = mi_vstore_search(cfg->store, query,
                                  cfg->n_retrieve, indices, scores);
 
-    /* Filter by threshold */
+
     int inject = 0;
     for (int i = 0; i < found; i++)
         if (scores[i] >= cfg->gate_threshold)
@@ -250,25 +215,23 @@ int mi_rag_augment(const MiRAGConfig *cfg, const float *query,
         return 0;
     }
 
-    /* Shift existing K/V forward to make room */
+
     memmove(K + (size_t)inject * kv_dim, K,
             (size_t)(*seq_len) * kv_dim * sizeof(float));
     memmove(V + (size_t)inject * kv_dim, V,
             (size_t)(*seq_len) * kv_dim * sizeof(float));
 
-    /* Copy retrieved embeddings into the prepended slots.
-     * We use the retrieved embedding for both K and V — in a real
-     * system you'd project through K/V weight matrices. */
+
     int written = 0;
     for (int i = 0; i < found && written < inject; i++) {
         if (scores[i] >= cfg->gate_threshold) {
             const float *emb = cfg->store->embeddings
                              + (size_t)indices[i] * cfg->store->dim;
-            /* If store dim != kv_dim, copy up to min */
+
             int copy_dim = MI_MIN(cfg->store->dim, kv_dim);
             memcpy(K + (size_t)written * kv_dim, emb, copy_dim * sizeof(float));
             memcpy(V + (size_t)written * kv_dim, emb, copy_dim * sizeof(float));
-            /* Zero-pad if kv_dim > store->dim */
+
             if (kv_dim > copy_dim) {
                 memset(K + (size_t)written * kv_dim + copy_dim, 0,
                        (kv_dim - copy_dim) * sizeof(float));

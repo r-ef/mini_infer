@@ -1,6 +1,4 @@
-/* cache_bench.c — benchmark dense / paged / sliding / compressed caches
- *
- * Measures: append throughput, get latency, memory characteristics. */
+
 #include "mi.h"
 
 static void bench_cache(const char *name, MiCache cache,
@@ -10,7 +8,7 @@ static void bench_cache(const char *name, MiCache cache,
 
     printf("── %s ──\n", name);
 
-    /* Append benchmark */
+
     MiTimer t;
     mi_timer_start(&t);
     for (int i = 0; i < n_tokens; i++) {
@@ -20,7 +18,7 @@ static void bench_cache(const char *name, MiCache cache,
     }
     double append_s = mi_timer_elapsed_s(&t);
 
-    /* Get benchmark */
+
     mi_timer_start(&t);
     for (int l = 0; l < n_layers; l++) {
         int len;
@@ -30,7 +28,7 @@ static void bench_cache(const char *name, MiCache cache,
     }
     double get_s = mi_timer_elapsed_s(&t);
 
-    /* Stats */
+
     char stats[256];
     if (cache.vt->stats) cache.vt->stats(&cache, stats, sizeof(stats));
     else snprintf(stats, sizeof(stats), "(no stats)");
@@ -40,7 +38,7 @@ static void bench_cache(const char *name, MiCache cache,
     printf("  Get all layers: %.6f s\n", get_s);
     printf("  Size: %d  |  %s\n\n", mi_cache_size(&cache), stats);
 
-    /* Truncate test */
+
     int half = mi_cache_size(&cache) / 2;
     mi_cache_truncate(&cache, half);
     printf("  After truncate to %d: size=%d\n\n", half, mi_cache_size(&cache));

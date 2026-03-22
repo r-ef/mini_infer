@@ -1,14 +1,4 @@
-/* speculative.c — speculative decoding (Leviathan et al. 2023)
- *
- * Algorithm:
- *   1. Draft model generates K tokens greedily
- *   2. Target model scores all K+1 positions in one batch
- *   3. Accept/reject each draft token:
- *        if p_target(x) ≥ p_draft(x)  → accept
- *        else                          → accept with prob p_target(x)/p_draft(x)
- *      on rejection, sample from max(0, p_target − p_draft)
- *   4. If all K accepted, sample one more from target's K+1 logits
- */
+
 #include "mi/speculative.h"
 #include "mi/ops.h"
 #include "mi/sampling.h"
@@ -44,7 +34,7 @@ int mi_spec_step(
     int K  = spec->cfg.n_draft;
     int V  = spec->vocab_size;
 
-    /* Allocate workspace */
+
     float *draft_logits  = (float *)malloc((size_t)K * V * sizeof(float));
     int   *draft_tokens  = (int *)malloc(K * sizeof(int));
     float *target_logits = (float *)malloc((size_t)(K + 1) * V * sizeof(float));
@@ -57,24 +47,24 @@ int mi_spec_step(
     MI_CHECK_OOM(p_target); MI_CHECK_OOM(residual);
     MI_CHECK_OOM(verify_tokens);
 
-    /* ── 1. Draft K tokens ── */
+
     int cur = input_token;
     for (int i = 0; i < K; i++) {
         spec->draft_forward(spec->draft_ctx, cur, draft_logits + i * V);
-        /* Greedy draft */
+
         draft_tokens[i] = mi_argmax(draft_logits + i * V, V);
         cur = draft_tokens[i];
     }
 
-    /* ── 2. Verify with target model ── */
+
     verify_tokens[0] = input_token;
     for (int i = 0; i < K; i++) verify_tokens[i + 1] = draft_tokens[i];
     target_forward_batch(target_ctx, verify_tokens, K + 1, target_logits);
 
-    /* ── 3. Accept/reject ── */
+
     int accepted = 0;
     for (int i = 0; i < K; i++) {
-        /* Convert to probabilities */
+
         memcpy(p_draft,  draft_logits  + i * V, V * sizeof(float));
         memcpy(p_target, target_logits + i * V, V * sizeof(float));
         mi_softmax(p_draft, V);
@@ -87,17 +77,17 @@ int mi_spec_step(
         spec->cfg.total_drafted++;
 
         if (pd <= 0.0f || pt >= pd) {
-            /* Accept deterministically */
+
             out_tokens[accepted++] = tok;
             spec->cfg.total_accepted++;
         } else {
-            /* Accept with probability pt/pd */
+
             float r = mi_rng_float(rng);
             if (r < pt / pd) {
                 out_tokens[accepted++] = tok;
                 spec->cfg.total_accepted++;
             } else {
-                /* Reject: sample from max(0, p_target − p_draft) */
+
                 float sum = 0.0f;
                 for (int j = 0; j < V; j++) {
                     residual[j] = MI_MAX(0.0f, p_target[j] - p_draft[j]);
@@ -107,7 +97,7 @@ int mi_spec_step(
                     float inv = 1.0f / sum;
                     for (int j = 0; j < V; j++) residual[j] *= inv;
                 }
-                /* Categorical sample from residual */
+
                 float cdf = 0.0f;
                 float rr = mi_rng_float(rng);
                 int corrected = V - 1;
@@ -117,7 +107,7 @@ int mi_spec_step(
                 }
                 out_tokens[accepted++] = corrected;
 
-                /* Rollback draft model to the point of rejection */
+
                 if (spec->draft_rollback)
                     spec->draft_rollback(spec->draft_ctx, accepted);
                 goto done;
@@ -125,7 +115,7 @@ int mi_spec_step(
         }
     }
 
-    /* All K tokens accepted — sample one more from target's final logits */
+
     {
         memcpy(p_target, target_logits + K * V, V * sizeof(float));
         mi_softmax(p_target, V);
@@ -142,7 +132,7 @@ int mi_spec_step(
 done:
     spec->cfg.total_steps++;
 
-    /* Notify draft model about accepted tokens */
+
     if (spec->draft_accept) {
         for (int i = 0; i < accepted; i++)
             spec->draft_accept(spec->draft_ctx, out_tokens[i]);

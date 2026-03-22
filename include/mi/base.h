@@ -1,7 +1,4 @@
-/* ═══════════════════════════════════════════════════════════════════
- * mini_infer — research inference engine
- * base.h — foundation types, macros, logging, RNG, timing
- * ═══════════════════════════════════════════════════════════════════ */
+
 #ifndef MI_BASE_H
 #define MI_BASE_H
 
@@ -14,7 +11,6 @@
 #include <float.h>
 #include <time.h>
 
-/* ── Status codes ── */
 typedef enum {
     MI_OK = 0,
     MI_ERR_OOM,
@@ -24,7 +20,6 @@ typedef enum {
     MI_ERR_NOT_IMPL,
 } MiStatus;
 
-/* ── Log levels ── */
 typedef enum {
     MI_LOG_TRACE = 0,
     MI_LOG_DEBUG = 1,
@@ -59,7 +54,6 @@ extern MiLogLevel mi_log_level;
 
 #define MI_CHECK_OOM(ptr) MI_ASSERT((ptr) != NULL, "out of memory")
 
-/* ── Utility macros ── */
 #define MI_MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MI_MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MI_CLAMP(x, lo, hi) MI_MIN(MI_MAX((x), (lo)), (hi))
@@ -67,7 +61,6 @@ extern MiLogLevel mi_log_level;
 #define MI_ARRAY_LEN(arr) ((int)(sizeof(arr) / sizeof((arr)[0])))
 #define MI_UNUSED(x) (void)(x)
 
-/* ── High-resolution timer ── */
 typedef struct {
     struct timespec start;
     struct timespec end;
@@ -84,15 +77,14 @@ static inline double mi_timer_elapsed_s(MiTimer *t) {
     return s + ns * 1e-9;
 }
 
-/* ── RNG — xoshiro256** ── */
 typedef struct {
     uint64_t s[4];
 } MiRng;
 
 MiRng   mi_rng_create(uint64_t seed);
 uint64_t mi_rng_next(MiRng *rng);
-float   mi_rng_float(MiRng *rng);          /* uniform [0, 1) */
-float   mi_rng_normal(MiRng *rng);         /* standard normal via Box-Muller */
-int     mi_rng_int(MiRng *rng, int lo, int hi); /* uniform [lo, hi) */
+float   mi_rng_float(MiRng *rng);
+float   mi_rng_normal(MiRng *rng);
+int     mi_rng_int(MiRng *rng, int lo, int hi);
 
-#endif /* MI_BASE_H */
+#endif

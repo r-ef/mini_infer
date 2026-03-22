@@ -1,4 +1,4 @@
-/* test_runner.c — comprehensive unit tests for mini_infer */
+
 #include "mi.h"
 #include <assert.h>
 
@@ -24,8 +24,6 @@ static int tests_passed = 0;
     if ((a) != (b)) { FAIL(#a " != " #b); return; } \
 } while(0)
 
-/* ════════════ Tensor tests ════════════ */
-
 static void test_tensor_basics(void) {
     TEST(tensor_create_and_access);
     MiTensor t = mi_tensor_zeros(3, 4);
@@ -43,12 +41,10 @@ static void test_tensor_clone(void) {
     MiTensor b = mi_tensor_clone(&a);
     ASSERT_NEAR(mi_tensor_get(&b, 1, 1), 7.0f, 1e-6f);
     mi_tensor_set(&b, 0, 0, 99.0f);
-    ASSERT_NEAR(mi_tensor_get(&a, 0, 0), 7.0f, 1e-6f);  /* original unchanged */
+    ASSERT_NEAR(mi_tensor_get(&a, 0, 0), 7.0f, 1e-6f);
     mi_tensor_free(&a); mi_tensor_free(&b);
     PASS();
 }
-
-/* ════════════ Ops tests ════════════ */
 
 static void test_dot_product(void) {
     TEST(dot_product);
@@ -73,8 +69,8 @@ static void test_rmsnorm(void) {
     float w[] = {1.0f, 1.0f};
     float out[2];
     mi_rmsnorm(x, w, out, 2, 1e-5f);
-    /* RMS of [3,4] = sqrt((9+16)/2) = sqrt(12.5) ≈ 3.536 */
-    /* out = [3/3.536, 4/3.536] ≈ [0.849, 1.131] */
+
+
     ASSERT_NEAR(out[0], 3.0f / sqrtf(12.5f), 1e-4f);
     PASS();
 }
@@ -101,8 +97,6 @@ static void test_silu(void) {
     ASSERT_NEAR(x[1], 1.0f / (1.0f + expf(-1.0f)), 1e-4f);
     PASS();
 }
-
-/* ════════════ Cache tests ════════════ */
 
 static void test_cache_dense(void) {
     TEST(cache_dense);
@@ -131,12 +125,12 @@ static void test_cache_sliding(void) {
         v[0] = (float)(-i); v[1] = 0;
         mi_cache_append(&c, 0, k, v);
     }
-    /* Should only have last 4 entries */
+
     ASSERT_EQ(mi_cache_size(&c), 4);
     int len;
     const float *K = mi_cache_keys(&c, 0, &len);
     ASSERT_EQ(len, 4);
-    /* First entry should be token 4 (the oldest in window) */
+
     ASSERT_NEAR(K[0], 4.0f, 1e-5f);
     mi_cache_destroy(&c);
     PASS();
@@ -161,8 +155,6 @@ static void test_cache_paged(void) {
     PASS();
 }
 
-/* ════════════ Sampling tests ════════════ */
-
 static void test_sampler_greedy(void) {
     TEST(sampler_greedy);
     MiSampler s = mi_sampler_greedy();
@@ -183,9 +175,9 @@ static void test_sampler_topk(void) {
         int tok = mi_sampler_sample(&s, logits, 4, &rng);
         counts[tok]++;
     }
-    /* Token 0 and 3 should be suppressed (not in top-2) */
-    assert(counts[1] > 300);  /* highest logit gets majority */
-    assert(counts[0] + counts[3] < 50); /* outside top-k get almost nothing */
+
+    assert(counts[1] > 300);
+    assert(counts[0] + counts[3] < 50);
     mi_sampler_destroy(&s);
     PASS();
 }
@@ -203,8 +195,6 @@ static void test_sampler_mirostat(void) {
     mi_sampler_destroy(&s);
     PASS();
 }
-
-/* ════════════ Quantisation tests ════════════ */
 
 static void test_quant_int8(void) {
     TEST(quant_int8_roundtrip);
@@ -244,14 +234,12 @@ static void test_fp16_roundtrip(void) {
     PASS();
 }
 
-/* ════════════ RoPE tests ════════════ */
-
 static void test_rope_standard(void) {
     TEST(rope_standard);
     MiRoPE rope = mi_rope_standard(10000.0f);
     float vec[] = {1, 0, 1, 0};
     mi_rope_apply(&rope, vec, 0, 1, 4);
-    /* At pos=0, angle=0, so cos=1, sin=0 → no change */
+
     ASSERT_NEAR(vec[0], 1.0f, 1e-5f);
     ASSERT_NEAR(vec[1], 0.0f, 1e-5f);
     mi_rope_destroy(&rope);
@@ -261,16 +249,14 @@ static void test_rope_standard(void) {
 static void test_rope_alibi(void) {
     TEST(rope_alibi_bias);
     MiRoPE alibi = mi_rope_alibi(4);
-    /* bias should be negative for k_pos < q_pos (causal) */
+
     float b = mi_rope_bias(&alibi, 0, 5, 3);
-    assert(b < 0);  /* (3 - 5) * slope < 0 */
+    assert(b < 0);
     float b0 = mi_rope_bias(&alibi, 0, 5, 5);
     ASSERT_NEAR(b0, 0.0f, 1e-6f);
     mi_rope_destroy(&alibi);
     PASS();
 }
-
-/* ════════════ Memory tests ════════════ */
 
 static void test_sink_evict(void) {
     TEST(sink_evict);
@@ -281,10 +267,10 @@ static void test_sink_evict(void) {
     MiSinkConfig cfg = { .sink_size = 2, .window_size = 3 };
     mi_sink_evict(K, V, &seq_len, kv_dim, &cfg);
     ASSERT_EQ(seq_len, 5);
-    /* First two entries should be original positions 0 and 1 */
+
     ASSERT_NEAR(K[0], 0.0f, 1e-5f);
     ASSERT_NEAR(K[4], 4.0f, 1e-5f);
-    /* Entry 2 should be original position 17 */
+
     ASSERT_NEAR(K[8], 17.0f * 4, 1e-5f);
     PASS();
 }
@@ -302,14 +288,12 @@ static void test_vstore(void) {
     float query[] = {1, 0, 0, 0};
     int idx[2]; float scores[2];
     mi_vstore_search(&vs, query, 2, idx, scores);
-    /* Should find e1 (exact match) first */
+
     ASSERT_EQ(idx[0], 0);
     ASSERT_NEAR(scores[0], 1.0f, 1e-5f);
     mi_vstore_free(&vs);
     PASS();
 }
-
-/* ════════════ Model tests ════════════ */
 
 static void test_model_forward(void) {
     TEST(model_forward_basic);
@@ -328,7 +312,7 @@ static void test_model_forward(void) {
     float *scratch = (float *)malloc(scratch_sz);
     float logits[10];
     mi_model_forward(&m, 0, logits, scratch);
-    /* Logits should be finite */
+
     for (int i = 0; i < 10; i++)
         assert(isfinite(logits[i]));
     free(scratch);
@@ -356,7 +340,7 @@ static void test_model_save_load(void) {
     s = mi_model_load(&m2, "/tmp/mi_test_model.bin");
     ASSERT_EQ(s, MI_OK);
 
-    /* Verify weights match */
+
     ASSERT_NEAR(mi_tensor_get(&m.w.tok_emb, 0, 0),
                 mi_tensor_get(&m2.w.tok_emb, 0, 0), 1e-6f);
     ASSERT_NEAR(m.w.layers[0].Wq.data[0],
@@ -366,8 +350,6 @@ static void test_model_save_load(void) {
     mi_model_free(&m2);
     PASS();
 }
-
-/* ════════════ Arena test ════════════ */
 
 static void test_arena(void) {
     TEST(arena_alloc_reset);
@@ -383,8 +365,6 @@ static void test_arena(void) {
     PASS();
 }
 
-/* ════════════ Main ════════════ */
-
 int main(void) {
     mi_log_level = MI_LOG_NONE;
 
@@ -392,45 +372,45 @@ int main(void) {
     printf("║   mini_infer test suite                ║\n");
     printf("╚═══════════════════════════════════════╝\n\n");
 
-    /* Tensor */
+
     test_tensor_basics();
     test_tensor_clone();
 
-    /* Ops */
+
     test_dot_product();
     test_softmax();
     test_rmsnorm();
     test_matvec();
     test_silu();
 
-    /* Cache */
+
     test_cache_dense();
     test_cache_sliding();
     test_cache_paged();
 
-    /* Sampling */
+
     test_sampler_greedy();
     test_sampler_topk();
     test_sampler_mirostat();
 
-    /* Quant */
+
     test_quant_int8();
     test_quant_q4_0();
     test_fp16_roundtrip();
 
-    /* RoPE */
+
     test_rope_standard();
     test_rope_alibi();
 
-    /* Memory */
+
     test_sink_evict();
     test_vstore();
 
-    /* Model */
+
     test_model_forward();
     test_model_save_load();
 
-    /* Arena */
+
     test_arena();
 
     printf("\n═══════════════════════════════════════\n");

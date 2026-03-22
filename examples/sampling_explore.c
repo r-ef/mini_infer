@@ -1,5 +1,4 @@
-/* sampling_explore.c — same logits distribution → different samplers
- *                       visualise how each method shapes the output. */
+
 #include "mi.h"
 
 static void print_probs(const float *logits, int n, const char *name) {
@@ -15,7 +14,7 @@ int main(void) {
     mi_log_level = MI_LOG_NONE;
 
     int V = 10;
-    /* A peaked distribution with a few high-probability tokens */
+
     float base_logits[10] = {3.0f, 2.5f, 1.0f, 0.5f, 0.2f,
                               -0.5f, -1.0f, -2.0f, -3.0f, -4.0f};
 
@@ -29,7 +28,7 @@ int main(void) {
     print_probs(base_logits, V, "base probs");
     printf("\n");
 
-    /* Test each sampler 100 times, count token frequencies */
+
     struct { const char *name; MiSampler s; } samplers[] = {
         {"greedy",          mi_sampler_greedy()},
         {"top_k(3, 1.0)",   mi_sampler_top_k(3, 1.0f)},
@@ -64,7 +63,7 @@ int main(void) {
             mi_sampler_accept(&samplers[si].s, tok);
         }
 
-        /* Print frequencies */
+
         printf("%-20s  ", samplers[si].name);
         float entropy = 0.0f;
         for (int i = 0; i < V; i++) {
@@ -79,7 +78,7 @@ int main(void) {
     for (int i = 0; i < n_samplers; i++)
         mi_sampler_destroy(&samplers[i].s);
 
-    /* ── Chain demo: repetition penalty + top-p ── */
+
     printf("═══ Chain: repetition(1.3, 5) → top_p(0.9, 0.8) ═══\n");
     MiSampler chain_items[2] = {
         mi_sampler_repetition(1.3f, 5),

@@ -1,8 +1,6 @@
-/* model.c — multi-layer transformer: lifecycle, forward pass, I/O */
+
 #include "mi/model.h"
 #include "mi/ops.h"
-
-/* ════════════ Lifecycle ════════════ */
 
 static void alloc_layer(MiLayerWeights *lw, const MiModelConfig *cfg) {
     int q_dim  = cfg->n_heads    * cfg->d_head;
@@ -41,7 +39,7 @@ MiModel mi_model_create(MiModelConfig cfg) {
     memset(&m, 0, sizeof(m));
     m.cfg = cfg;
 
-    /* Weights */
+
     m.w.tok_emb  = mi_tensor_zeros(cfg.vocab_size, cfg.d_model);
     m.w.out_proj = mi_tensor_zeros(cfg.vocab_size, cfg.d_model);
     m.w.rms_final = (float *)calloc(cfg.d_model, sizeof(float));
@@ -53,7 +51,7 @@ MiModel mi_model_create(MiModelConfig cfg) {
     for (int l = 0; l < cfg.n_layers; l++)
         alloc_layer(&m.w.layers[l], &cfg);
 
-    /* Default components */
+
     m.cache = mi_cache_dense(cfg.n_layers, cfg.n_kv_heads, cfg.d_head,
                              cfg.max_seq_len);
     m.attn  = mi_attention_standard();
@@ -64,7 +62,7 @@ MiModel mi_model_create(MiModelConfig cfg) {
 
 void mi_model_init_random(MiModel *m, MiRng *rng) {
     MiModelConfig *c = &m->cfg;
-    float std = 0.02f;   /* typical init std for small models */
+    float std = 0.02f;
 
     mi_tensor_rand_normal(&m->w.tok_emb, rng, 0.0f, std);
     mi_tensor_rand_normal(&m->w.out_proj, rng, 0.0f, std);
@@ -104,24 +102,20 @@ void mi_model_reset(MiModel *m) {
     m->pos = 0;
 }
 
-/* ════════════ Scratch sizing ════════════ */
-
 size_t mi_model_scratch_size(const MiModelConfig *cfg) {
     int d      = cfg->d_model;
     int q_dim  = cfg->n_heads * cfg->d_head;
     int kv_dim = cfg->n_kv_heads * cfg->d_head;
     int ff     = cfg->d_ff;
 
-    /* x, x_norm, q, k, v, attn_out, o_proj, ffn_out */
+
     size_t per_token = (size_t)(d * 3 + q_dim * 2 + kv_dim * 2 + ff * 2);
-    /* attention scratch (scores) */
+
     per_token += cfg->max_seq_len;
-    /* generous padding */
+
     per_token += 256;
     return per_token * sizeof(float);
 }
-
-/* ════════════ Forward pass — single token ════════════ */
 
 void mi_model_forward(MiModel *m, int token, float *logits, float *scratch) {
     MiModelConfig *cfg = &m->cfg;
@@ -131,7 +125,7 @@ void mi_model_forward(MiModel *m, int token, float *logits, float *scratch) {
     int ff      = cfg->d_ff;
     int pos     = m->pos;
 
-    /* Carve scratch into named buffers */
+
     float *ptr = scratch;
     #define SALLOC(n) (ptr += (n), ptr - (n))
     float *x         = SALLOC(d);
@@ -146,44 +140,44 @@ void mi_model_forward(MiModel *m, int token, float *logits, float *scratch) {
     float *attn_scratch = SALLOC(cfg->max_seq_len);
     #undef SALLOC
 
-    /* Embedding lookup */
+
     mi_vec_copy(mi_tensor_row(&m->w.tok_emb, token), x, d);
 
-    /* Transformer layers */
+
     for (int l = 0; l < cfg->n_layers; l++) {
         MiLayerWeights *lw = &m->w.layers[l];
 
-        /* Pre-attention RMSNorm */
+
         mi_rmsnorm(x, lw->rms_att, x_norm, d, cfg->norm_eps);
 
-        /* QKV projections */
+
         mi_matvec(&lw->Wq, x_norm, q);
         mi_matvec(&lw->Wk, x_norm, k);
         mi_matvec(&lw->Wv, x_norm, v);
 
-        /* Positional encoding */
+
         mi_rope_apply(&m->rope, q, pos, cfg->n_heads, cfg->d_head);
         mi_rope_apply(&m->rope, k, pos, cfg->n_kv_heads, cfg->d_head);
 
-        /* KV cache */
+
         mi_cache_append(&m->cache, l, k, v);
         int seq_len;
         const float *K = mi_cache_keys(&m->cache, l, &seq_len);
         const float *V = mi_cache_values(&m->cache, l, &seq_len);
 
-        /* Attention */
+
         mi_attention_decode(&m->attn, q, K, V, attn_out,
                            cfg->n_heads, cfg->n_kv_heads, cfg->d_head,
                            seq_len, pos, attn_scratch);
 
-        /* Output projection + residual */
+
         mi_matvec(&lw->Wo, attn_out, o_proj);
         mi_vec_add(x, o_proj, x, d);
 
-        /* Pre-FFN RMSNorm */
+
         mi_rmsnorm(x, lw->rms_ffn, x_norm, d, cfg->norm_eps);
 
-        /* FFN + residual */
+
         if (cfg->ffn_type == MI_FFN_SWIGLU)
             mi_swiglu_ffn(&lw->W1, &lw->W3, &lw->W2,
                           x_norm, ffn_out, ffn_scratch);
@@ -194,43 +188,22 @@ void mi_model_forward(MiModel *m, int token, float *logits, float *scratch) {
         mi_vec_add(x, ffn_out, x, d);
     }
 
-    /* Final norm + logits */
+
     mi_rmsnorm(x, m->w.rms_final, x_norm, d, cfg->norm_eps);
     mi_matvec(&m->w.out_proj, x_norm, logits);
 
     m->pos++;
 }
 
-/* ════════════ Batch forward — returns logits at every position ════════════ */
-
 void mi_model_forward_batch(MiModel *m, const int *tokens, int n,
                             float *logits, float *scratch) {
-    /* Simple implementation: process tokens one by one.
-     * For research on prefill optimization, replace with true batched
-     * attention (using the prefill vtable method). */
+
     for (int i = 0; i < n; i++) {
         mi_model_forward(m, tokens[i],
                          logits + (size_t)i * m->cfg.vocab_size,
                          scratch);
     }
 }
-
-/* ════════════ Binary I/O — v2 format (portable, field-by-field) ════════════
- *
- * Layout:
- *   "MINI"  (4 bytes)
- *   int32   version = 2
- *   int32   d_model, n_heads, n_kv_heads, d_head, d_ff
- *   int32   n_layers, vocab_size, max_seq_len
- *   float32 norm_eps, rope_theta
- *   int32   ffn_type
- *   float32[vocab_size * d_model]   tok_emb
- *   per layer:
- *     float32[...]  Wq, Wk, Wv, Wo, W1, W2, [W3 if SwiGLU]
- *     float32[d_model]  rms_att, rms_ffn
- *   float32[d_model]   rms_final
- *   float32[vocab_size * d_model]  out_proj
- */
 
 #define MI_MODEL_MAGIC 0x4D494E49
 #define MI_MODEL_VERSION 2

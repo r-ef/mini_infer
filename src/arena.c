@@ -1,4 +1,4 @@
-/* arena.c — bump allocator */
+
 #include "mi/arena.h"
 
 MiArena mi_arena_create(size_t cap) {
@@ -18,7 +18,7 @@ void mi_arena_free(MiArena *a) {
 }
 
 void *mi_arena_alloc(MiArena *a, size_t bytes) {
-    /* 16-byte alignment */
+
     size_t aligned = MI_ALIGN_UP(bytes, 16);
     MI_ASSERT(a->used + aligned <= a->cap,
               "arena OOM: need %zu, have %zu free",

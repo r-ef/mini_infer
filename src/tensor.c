@@ -1,4 +1,4 @@
-/* tensor.c — MiTensor lifecycle & utilities */
+
 #include "mi/tensor.h"
 
 MiTensor mi_tensor_create(int rows, int cols) {

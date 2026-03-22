@@ -1,16 +1,5 @@
-/* ops.c — core math operations with SIMD acceleration
- *
- * Platform detection at compile time:
- *   ARM64  → NEON  (automatic on aarch64, no flags needed)
- *   x86_64 → AVX2+FMA  (needs -mavx2 -mfma)
- *            SSE   (fallback, needs -msse4.1 or is auto)
- *   other  → scalar
- *
- * Build with MI_NO_SIMD defined to force scalar path for debugging.
- */
-#include "mi/ops.h"
 
-/* ════════════ SIMD detection ════════════ */
+#include "mi/ops.h"
 
 #if !defined(MI_NO_SIMD)
   #if defined(__ARM_NEON) || defined(__ARM_NEON__)
@@ -25,19 +14,16 @@
   #endif
 #endif
 
-/* ── AVX2 horizontal sum helper ── */
 #if MI_AVX2
 static inline float hsum_avx(__m256 v) {
     __m128 hi  = _mm256_extractf128_ps(v, 1);
     __m128 lo  = _mm256_castps256_ps128(v);
-    __m128 sum = _mm_add_ps(lo, hi);           /* 4 floats */
-    sum = _mm_hadd_ps(sum, sum);               /* 2 floats */
-    sum = _mm_hadd_ps(sum, sum);               /* 1 float  */
+    __m128 sum = _mm_add_ps(lo, hi);
+    sum = _mm_hadd_ps(sum, sum);
+    sum = _mm_hadd_ps(sum, sum);
     return _mm_cvtss_f32(sum);
 }
 #endif
-
-/* ════════════ Dot product ════════════ */
 
 float mi_dot(const float *a, const float *b, int n) {
 #if MI_NEON
@@ -69,8 +55,6 @@ float mi_dot(const float *a, const float *b, int n) {
     return s;
 #endif
 }
-
-/* ════════════ Vector ops ════════════ */
 
 void mi_vec_add(const float *a, const float *b, float *out, int n) {
 #if MI_NEON
@@ -208,19 +192,13 @@ float mi_vec_cosine(const float *a, const float *b, int n) {
     return d / (na * nb);
 }
 
-/* ════════════ Matrix-vector — THE hot path ════════════
- *
- * Process 4 rows at a time, reusing x loads across rows.
- * Inner loop unrolled 2× to hide FMA latency.
- */
-
 void mi_matvec(const MiTensor *W, const float *x, float *out) {
     const int rows = W->rows;
     const int cols = W->cols;
     int r = 0;
 
 #if MI_NEON
-    /* ── NEON: 4 rows × 8 cols per iteration ── */
+
     for (; r + 3 < rows; r += 4) {
         const float *r0 = W->data + (r+0) * cols;
         const float *r1 = W->data + (r+1) * cols;
@@ -259,7 +237,7 @@ void mi_matvec(const MiTensor *W, const float *x, float *out) {
             out[r+3] += r3[c] * xc;
         }
     }
-    /* Remaining rows: 1 at a time */
+
     for (; r < rows; r++) {
         const float *row = W->data + r * cols;
         float32x4_t s0 = vdupq_n_f32(0), s1 = vdupq_n_f32(0);
@@ -274,7 +252,7 @@ void mi_matvec(const MiTensor *W, const float *x, float *out) {
     }
 
 #elif MI_AVX2
-    /* ── AVX2+FMA: 4 rows × 16 cols per iteration ── */
+
     for (; r + 3 < rows; r += 4) {
         const float *r0 = W->data + (r+0) * cols;
         const float *r1 = W->data + (r+1) * cols;
@@ -327,7 +305,7 @@ void mi_matvec(const MiTensor *W, const float *x, float *out) {
     }
 
 #else
-    /* ── Scalar fallback ── */
+
     for (; r < rows; r++) {
         const float *row = W->data + r * cols;
         float s = 0.0f;
@@ -336,8 +314,6 @@ void mi_matvec(const MiTensor *W, const float *x, float *out) {
     }
 #endif
 }
-
-/* ════════════ Activations ════════════ */
 
 void mi_relu(float *x, int n) {
 #if MI_NEON
@@ -352,9 +328,7 @@ void mi_relu(float *x, int n) {
 }
 
 void mi_silu(float *x, int n) {
-    /* SiLU = x * sigmoid(x).  expf is the bottleneck — no good SIMD
-     * intrinsic, so we just auto-vectorize the loop with -O2.
-     * The compiler handles this reasonably well. */
+
     for (int i = 0; i < n; i++)
         x[i] = x[i] / (1.0f + expf(-x[i]));
 }
@@ -368,11 +342,9 @@ void mi_gelu(float *x, int n) {
     }
 }
 
-/* ════════════ Normalization ════════════ */
-
 void mi_rmsnorm(const float *x, const float *w, float *out,
                 int n, float eps) {
-    /* Sum of squares → SIMD dot(x, x) */
+
     float ss = mi_dot(x, x, n);
     float scale = 1.0f / sqrtf(ss / (float)n + eps);
 
@@ -410,8 +382,6 @@ void mi_layernorm(const float *x, const float *gamma, const float *beta,
         out[i] = (x[i] - mean) * scale * gamma[i] + beta[i];
 }
 
-/* ════════════ Softmax ════════════ */
-
 void mi_softmax(float *x, int n) {
     float m = mi_vec_max(x, n);
     float s = 0.0f;
@@ -428,8 +398,6 @@ void mi_log_softmax(const float *x, float *out, int n) {
     for (int i = 0; i < n; i++) out[i] = x[i] - lse;
 }
 
-/* ════════════ Selection ════════════ */
-
 int mi_argmax(const float *x, int n) {
     int best = 0;
     for (int i = 1; i < n; i++) if (x[i] > x[best]) best = i;
@@ -440,8 +408,6 @@ int mi_argmin(const float *x, int n) {
     for (int i = 1; i < n; i++) if (x[i] < x[best]) best = i;
     return best;
 }
-
-/* ════════════ FFN blocks ════════════ */
 
 void mi_swiglu_ffn(const MiTensor *W_gate, const MiTensor *W_up,
                    const MiTensor *W_down,

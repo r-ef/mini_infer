@@ -1,16 +1,12 @@
-/* cache.c — four KV-cache layouts: dense, paged, sliding, compressed */
+
 #include "mi/cache.h"
 #include "mi/ops.h"
 
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  1. DENSE CACHE — contiguous pre-allocated arrays (baseline)    ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
-
 typedef struct {
-    float *K;          /* [n_layers * max_seq * kv_dim] */
+    float *K;
     float *V;
     int    max_seq;
-    int    size;       /* tokens cached (same for all layers) */
+    int    size;
     int    n_layers;
     int    kv_dim;
 } DenseCtx;
@@ -21,8 +17,7 @@ static float *dense_kv(float *base, int layer, int max_seq, int kv_dim) {
 
 static void dense_append(MiCache *c, int layer, const float *k, const float *v) {
     DenseCtx *d = (DenseCtx *)c->ctx;
-    /* Increment on first layer so all layers see the current position
-     * in get_keys/get_values (needed for self-attention). */
+
     if (layer == 0) {
         MI_ASSERT(d->size < d->max_seq, "dense cache full (%d)", d->max_seq);
         d->size++;
@@ -89,36 +84,28 @@ MiCache mi_cache_dense(int n_layers, int n_kv_heads, int d_head, int max_seq) {
         .d_head = d_head, .kv_dim = kv_dim };
 }
 
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  2. PAGED CACHE — block-allocated pages (vLLM-style)            ║
- * ║                                                                   ║
- * ║  Physical pages are pooled.  Each layer maintains a page table   ║
- * ║  mapping logical block index → physical page.  Pages hold        ║
- * ║  page_size entries of [kv_dim] floats.                            ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
-
 typedef struct {
-    /* Page pool: each page = page_size * kv_dim floats */
-    float *k_pool;       /* [max_pages * page_size * kv_dim] */
+
+    float *k_pool;
     float *v_pool;
     int    page_size;
     int    max_pages;
     int    kv_dim;
     int    n_layers;
 
-    /* Free list (stack) */
+
     int   *free_stack;
     int    n_free;
 
-    /* Per-layer page tables: page_table[layer][block_idx] = phys page id */
+
     int  **page_table;
-    int   *n_blocks;       /* [n_layers] blocks allocated per layer */
+    int   *n_blocks;
 
-    int    size;           /* current token count */
+    int    size;
 
-    /* Staging: used by get_keys/get_values to return contiguous data */
+
     float *staging;
-    int    staging_cap;    /* max tokens for staging */
+    int    staging_cap;
 } PagedCtx;
 
 static float *paged_page(float *pool, int page_id, int page_size, int kv_dim) {
@@ -140,7 +127,7 @@ static void paged_append(MiCache *c, int layer, const float *k, const float *v) 
     int pos = p->size - 1;
     int pos_in_block = pos % p->page_size;
 
-    /* Need a new page for this layer? */
+
     if (pos_in_block == 0) {
         int pid = paged_alloc_page(p);
         p->page_table[layer][p->n_blocks[layer]++] = pid;
@@ -156,13 +143,12 @@ static void paged_append(MiCache *c, int layer, const float *k, const float *v) 
     memcpy(vp, v, p->kv_dim * sizeof(float));
 }
 
-/* Gather pages into contiguous staging buffer */
 static const float *paged_gather(PagedCtx *p, float *pool,
                                   int layer, int *seq_len) {
     *seq_len = p->size;
     if (p->size == 0) return p->staging;
 
-    /* Ensure staging is large enough */
+
     int needed = p->size * p->kv_dim;
     if (needed > p->staging_cap * p->kv_dim) {
         p->staging = (float *)realloc(p->staging, (size_t)needed * sizeof(float));
@@ -197,7 +183,7 @@ static void paged_truncate(MiCache *c, int n) {
     PagedCtx *p = (PagedCtx *)c->ctx;
     if (n >= p->size) return;
 
-    /* Free pages that are entirely beyond position n */
+
     int keep_blocks = (n + p->page_size - 1) / p->page_size;
     for (int l = 0; l < p->n_layers; l++) {
         for (int b = keep_blocks; b < p->n_blocks[l]; b++)
@@ -255,7 +241,7 @@ MiCache mi_cache_paged(int n_layers, int n_kv_heads, int d_head,
     p->n_free = max_pages;
     for (int i = 0; i < max_pages; i++) p->free_stack[i] = i;
 
-    int max_blocks_per_layer = max_pages;  /* conservative upper bound */
+    int max_blocks_per_layer = max_pages;
     p->page_table = (int **)calloc(n_layers, sizeof(int *));
     p->n_blocks   = (int *)calloc(n_layers, sizeof(int));
     MI_CHECK_OOM(p->page_table); MI_CHECK_OOM(p->n_blocks);
@@ -274,22 +260,15 @@ MiCache mi_cache_paged(int n_layers, int n_kv_heads, int d_head,
         .d_head = d_head, .kv_dim = kv_dim };
 }
 
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  3. SLIDING WINDOW — ring buffer (Mistral-style)                ║
- * ║                                                                   ║
- * ║  Attention only sees the last `window` tokens.  Memory is O(W)  ║
- * ║  regardless of total sequence length.                             ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
-
 typedef struct {
-    float *K;           /* [n_layers * window * kv_dim] */
+    float *K;
     float *V;
     int    window;
     int    kv_dim;
     int    n_layers;
-    int    total_written; /* monotonically increasing */
+    int    total_written;
 
-    /* Staging for linearised get (ring → contiguous) */
+
     float *staging;
 } SlidingCtx;
 
@@ -303,7 +282,6 @@ static void sliding_append(MiCache *c, int layer, const float *k, const float *v
     memcpy(s->V + base, v, s->kv_dim * sizeof(float));
 }
 
-/* Linearise ring buffer into staging for the given layer and pool */
 static const float *sliding_linearise(SlidingCtx *s, float *pool,
                                        int layer, int *seq_len) {
     int len = MI_MIN(s->total_written, s->window);
@@ -313,12 +291,11 @@ static const float *sliding_linearise(SlidingCtx *s, float *pool,
     float *base = pool + (size_t)layer * s->window * s->kv_dim;
 
     if (s->total_written <= s->window) {
-        /* Haven't wrapped yet — already contiguous */
+
         return base;
     }
 
-    /* Wrapped: oldest entry is at slot (total_written % window).
-     * Copy [oldest..window) then [0..oldest) */
+
     int oldest = s->total_written % s->window;
     int part1 = s->window - oldest;
     memcpy(s->staging,
@@ -391,37 +368,28 @@ MiCache mi_cache_sliding(int n_layers, int n_kv_heads, int d_head,
         .d_head = d_head, .kv_dim = kv_dim };
 }
 
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  4. COMPRESSED CACHE — int8 for old entries, fp32 for recent    ║
- * ║                                                                   ║
- * ║  Entries 0 .. size-fresh_count-1 are stored as int8 + scale.    ║
- * ║  Entries size-fresh_count .. size-1 remain fp32.                 ║
- * ║  On get_keys/values, int8 entries are dequantised to staging.   ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
-
 typedef struct {
-    /* Fresh (fp32) storage — [n_layers * max_seq * kv_dim] */
+
     float  *K_f32;
     float  *V_f32;
 
-    /* Compressed (int8) storage */
-    int8_t *K_i8;          /* [n_layers * max_seq * kv_dim] */
+
+    int8_t *K_i8;
     int8_t *V_i8;
-    float  *K_scales;      /* [n_layers * max_seq] one scale per position */
+    float  *K_scales;
     float  *V_scales;
 
     int     max_seq;
     int     kv_dim;
     int     n_layers;
-    int     fresh_count;   /* how many recent entries stay fp32 */
+    int     fresh_count;
     int     size;
-    int     compressed_up_to; /* entries [0, compressed_up_to) are in int8 */
+    int     compressed_up_to;
 
-    /* Staging for dequantised + fresh concatenation */
+
     float  *staging;
 } CompressedCtx;
 
-/* Quantise a single kv vector to int8 absmax */
 static void compress_vec(const float *src, int8_t *dst, float *scale, int n) {
     float amax = 0.0f;
     for (int i = 0; i < n; i++) {
@@ -445,7 +413,7 @@ static void decompress_vec(const int8_t *src, float scale, float *dst, int n) {
 }
 
 static void compressed_maybe_compress(CompressedCtx *cc) {
-    /* Compress entries that are no longer "fresh" */
+
     int target = cc->size - cc->fresh_count;
     if (target <= cc->compressed_up_to) return;
 
@@ -483,14 +451,14 @@ static const float *compressed_get(CompressedCtx *cc, float *f32, int8_t *i8,
 
     float *out = cc->staging;
 
-    /* Dequantise compressed portion */
+
     for (int t = 0; t < cc->compressed_up_to; t++) {
         size_t off_vec   = (size_t)layer * cc->max_seq * cc->kv_dim + t * cc->kv_dim;
         size_t off_scale = (size_t)layer * cc->max_seq + t;
         decompress_vec(i8 + off_vec, scales[off_scale],
                        out + t * cc->kv_dim, cc->kv_dim);
     }
-    /* Copy fresh portion */
+
     int fresh_start = MI_MAX(0, cc->compressed_up_to);
     if (fresh_start < cc->size) {
         size_t off = (size_t)layer * cc->max_seq * cc->kv_dim + fresh_start * cc->kv_dim;

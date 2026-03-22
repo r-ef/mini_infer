@@ -1,6 +1,4 @@
-/* ═══════════════════════════════════════════════════════════════════
- * mi.h — umbrella header for mini_infer research engine
- * ═══════════════════════════════════════════════════════════════════ */
+
 #ifndef MI_H
 #define MI_H
 
@@ -19,4 +17,4 @@
 #include "mi/generate.h"
 #include "mi/tokenizer.h"
 
-#endif /* MI_H */
+#endif

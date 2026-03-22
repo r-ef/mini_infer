@@ -1,8 +1,7 @@
-/* rope.c — RoPE variants + ALiBi */
+
 #include "mi/rope.h"
 #include <math.h>
 
-/* ── Common rotation kernel ── */
 static void rope_rotate(float *vec, int n_heads, int d_head,
                         int pos, float theta) {
     for (int h = 0; h < n_heads; h++) {
@@ -19,10 +18,6 @@ static void rope_rotate(float *vec, int n_heads, int d_head,
         }
     }
 }
-
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  1. Standard RoPE                                                 ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
 
 typedef struct { float theta; } StdCtx;
 
@@ -46,13 +41,6 @@ MiRoPE mi_rope_standard(float theta) {
     return (MiRoPE){ .vt = &std_vt, .ctx = c };
 }
 
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  2. NTK-Aware — scale θ for longer contexts                     ║
- * ║                                                                   ║
- * ║  θ' = θ · α^(d/(d-2))  where α = scale_factor                  ║
- * ║  This adjusts all frequency bands proportionally.                ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
-
 typedef struct { float theta_scaled; } NTKCtx;
 
 static void ntk_apply(MiRoPE *r, float *vec,
@@ -69,27 +57,17 @@ static const MiRoPEVT ntk_vt = {
 MiRoPE mi_rope_ntk(float theta, float scale_factor) {
     NTKCtx *c = (NTKCtx *)malloc(sizeof(NTKCtx));
     MI_CHECK_OOM(c);
-    /* For typical d_head=128: exponent ≈ d/(d-2) ≈ 1.016.
-     * We use a representative d_head=128 for the exponent. */
+
     float d = 128.0f;
     c->theta_scaled = theta * powf(scale_factor, d / (d - 2.0f));
     return (MiRoPE){ .vt = &ntk_vt, .ctx = c };
 }
 
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  3. YaRN — NTK + frequency interpolation + attention scaling    ║
- * ║                                                                   ║
- * ║  Low frequencies: interpolated (divide pos by scale).            ║
- * ║  High frequencies: kept at original scale.                       ║
- * ║  Middle: linearly blended.                                       ║
- * ║  Plus an attention temperature correction ~ sqrt(1 + ln(s)/ln(L))║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
-
 typedef struct {
     float theta;
     float scale;
     int   orig_max;
-    float attn_factor; /* multiplicative scaling for attention scores */
+    float attn_factor;
 } YaRNCtx;
 
 static void yarn_apply(MiRoPE *r, float *vec,
@@ -97,8 +75,7 @@ static void yarn_apply(MiRoPE *r, float *vec,
     YaRNCtx *c = (YaRNCtx *)r->ctx;
     float alpha = c->scale;
 
-    /* Wavelength thresholds for interpolation boundaries.
-     * β_fast = 32, β_slow = 1 (from YaRN paper defaults) */
+
     float beta_fast = 32.0f;
     float beta_slow = 1.0f;
     float low_freq_factor  = (float)c->orig_max / beta_slow;
@@ -112,13 +89,13 @@ static void yarn_apply(MiRoPE *r, float *vec,
 
             float effective_pos;
             if (wavelength < high_freq_factor) {
-                /* High frequency: no interpolation */
+
                 effective_pos = (float)pos;
             } else if (wavelength > low_freq_factor) {
-                /* Low frequency: full interpolation */
+
                 effective_pos = (float)pos / alpha;
             } else {
-                /* Middle: linear ramp */
+
                 float t = (wavelength - high_freq_factor)
                         / (low_freq_factor - high_freq_factor);
                 float interp_pos = (float)pos / alpha;
@@ -150,13 +127,6 @@ MiRoPE mi_rope_yarn(float theta, float scale_factor, int orig_max) {
     c->attn_factor = sqrtf(1.0f + logf(scale_factor) / logf((float)orig_max));
     return (MiRoPE){ .vt = &yarn_vt, .ctx = c };
 }
-
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  4. Dynamic NTK — auto-scale θ when position exceeds training   ║
- * ║                                                                   ║
- * ║  At position p > L:  θ' = θ · (α)^(d/(d-2))                    ║
- * ║  where α = p / L (dynamic per-position).                        ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
 
 typedef struct {
     float theta;
@@ -190,21 +160,14 @@ MiRoPE mi_rope_dynamic(float theta, int orig_max) {
     return (MiRoPE){ .vt = &dyn_vt, .ctx = c };
 }
 
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  5. ALiBi — Attention with Linear Biases                        ║
- * ║                                                                   ║
- * ║  No rotation.  Instead, bias(h, q, k) = slope_h · (k − q).     ║
- * ║  slope_h = 2^(−8·h/H) for head h ∈ [0, H).                     ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
-
 typedef struct {
-    float *slopes;    /* [n_heads] */
+    float *slopes;
     int    n_heads;
 } ALiBiCtx;
 
 static void alibi_apply(MiRoPE *r, float *vec,
                         int pos, int n_heads, int d_head) {
-    /* ALiBi does not modify the vectors */
+
     MI_UNUSED(r); MI_UNUSED(vec);
     MI_UNUSED(pos); MI_UNUSED(n_heads); MI_UNUSED(d_head);
 }
@@ -231,16 +194,12 @@ MiRoPE mi_rope_alibi(int n_heads) {
     c->n_heads = n_heads;
     c->slopes  = (float *)malloc(n_heads * sizeof(float));
     MI_CHECK_OOM(c->slopes);
-    /* Geometric slopes: 2^(−8/H), 2^(−16/H), … */
+
     float base = powf(2.0f, -8.0f / (float)n_heads);
     for (int h = 0; h < n_heads; h++)
         c->slopes[h] = powf(base, (float)(h + 1));
     return (MiRoPE){ .vt = &alibi_vt, .ctx = c };
 }
-
-/* ╔═══════════════════════════════════════════════════════════════════╗
- * ║  6. None — identity, for ablation / testing                      ║
- * ╚═══════════════════════════════════════════════════════════════════╝ */
 
 static void none_apply(MiRoPE *r, float *vec,
                        int pos, int n_heads, int d_head) {
