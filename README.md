@@ -1,4 +1,4 @@
-
+<pre>
 
                                         ╔══╗
                                         ║  ║
@@ -434,3 +434,4 @@ how it differs from llama.cpp:
 
                                          *
 
+</pre>
